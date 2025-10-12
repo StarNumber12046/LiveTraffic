@@ -163,7 +163,7 @@ bool VolantaConnection::ProcessFetchedData()
 
         const std::string displayName = jog_s(aircraftJson, VL_DISPLAYNAME);
         LOG_MSG(logDEBUG, "[Volanta] displayName = '%s'", displayName.c_str());
-		LOG_MSG(logDEBUG, "[Volanta] Own a/c display name is '%s'", dataRefs.GetSIDisplayName());
+		LOG_MSG(logDEBUG, "[Volanta] Own a/c display name is '%s'", dataRefs.GetSIDisplayName().c_str());
         // Displayname is matching? My own flight! -> Skip it
         if (displayName == dataRefs.GetSIDisplayName()) // Still says SI, I dont care, will fix maybe
             continue;
