@@ -1,10 +1,10 @@
-/// @file       LTSayIntentions.h
-/// @brief      Channel to SayIntentions traffic map
-/// @see        https://tracker.sayintentions.ai/
+/// @file       LTVolanta.h
+/// @brief      Channel to Volanta traffic map
+/// @see        https://fly.volanta.app/
 /// @details    Defines SayIntentionsConnection:\n
-///             Takes traffic from https://lambda.sayintentions.ai/tracker/map
-/// @author     Birger Hoppe
-/// @copyright  (c) 2024 Birger Hoppe
+///             Takes traffic from https://webassets.volanta.app/volanta-flight-positions.json
+/// @author     StarNumber
+/// @copyright  (c) 2025 StarNumber
 /// @copyright  Permission is hereby granted, free of charge, to any person obtaining a
 ///             copy of this software and associated documentation files (the "Software"),
 ///             to deal in the Software without restriction, including without limitation
@@ -21,52 +21,56 @@
 ///             OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 ///             THE SOFTWARE.
 
-#ifndef LTSayIntentions_h
-#define LTSayIntentions_h
+#ifndef LTVolanta_h
+#define LTVolanta_h
 
 #include "LTChannel.h"
 
 //
-//MARK: SayIntentions Constants
+//MARK: Volanta Constants
 //
-#define SI_CHECK_NAME           "SayIntentions Flight Tracker"
-#define SI_CHECK_URL            "https://tracker.sayintentions.ai"
-#define SI_CHECK_POPUP          "See who's flying with SayIntentions just now"
+#define VL_CHECK_NAME           "Volanta Flight Tracker"
+#define VL_CHECK_URL            "https://fly.volanta.app"
+#define VL_CHECK_POPUP          "See who's flying with Volanta just now"
 
-#define SI_NAME                 "SayIntentions"
-#define SI_URL_ALL              "https://lambda.sayintentions.ai/tracker/map"
+#define VL_NAME                 "Volanta"
+#define VL_URL_ALL              "https://webassets.volanta.app/volanta-flight-positions.json"
 
-#define SI_KEY                  "flight_id"
-#define SI_LAT                  "lat"
-#define SI_LON                  "lon"
-#define SI_ALT                  "altitude"
-#define SI_ALT_AGL              "altitude_agl"
-#define SI_DISPLAYNAME          "displayname"
-#define SI_ORIGIN               "origin"
-#define SI_DEST                 "final_destination"
-#define SI_CALL                 "flight_icao"           ///< callsign machine-readable, e.g. "AAL2502"
-#define SI_CALL_SPOKEN          "callsign"              ///< callsign as spoken, e.g. "American-two-five-zero-two"
-#define SI_REG                  "tail_number"
-#define SI_HEADING              "heading"
-#define SI_AC_TYPE              "aircraft_icao"
-#define SI_SPD                  "airspeed"
+#define VL_DATA                 "data"
+
+#define VL_NETWORK              "network"               ///< network (Vatsim, Volanta, IVAO)
+#define VL_NETWORK_NAME         "Volanta"               ///< network name, e.g. "Volanta"
+
+#define VL_KEY                  "id"
+#define VL_POSITION             "position"              ///< position object
+#define VL_LAT                  "latitude"
+#define VL_LON                  "longitude"
+#define VL_ALT                  "altitude"
+#define VL_ALT_AGL              "altitudeAgl"
+#define VL_DISPLAYNAME          "networkUserName"
+#define VL_ORIGIN               "originIcao"
+#define VL_DEST                 "destinationIcao"
+#define VL_CALL                 "callsign"           ///< callsign machine-readable, e.g. "AAL2502"
+#define VL_REG                  "aircraftRegistration"
+#define VL_HEADING              "headingTrue"
+#define VL_AC_TYPE              "aircraftIcao"
+#define VL_SPD                  "groundSpeed"
 
 //
-// MARK: SayIntentions connection class
+// MARK: Volanta connection class
 //
 
-/// Connection to SayIntentions
-class SayIntentionsConnection : public LTFlightDataChannel
+/// Connection to Volanta
+class VolantaConnection : public LTFlightDataChannel
 {
 protected:
     double  tsRequest = NAN;                                ///< when did we send the last request?
 public:
-    SayIntentionsConnection ();                             ///< Constructor
+    VolantaConnection ();                             ///< Constructor
     std::string GetURL (const positionTy& pos) override;    ///< returns the constant URL to SayIntentions traffic
     bool ProcessFetchedData () override;                    ///< Process response, selecting traffic around us and forwarding to the processing queues
 protected:
     void Main () override;                                  ///< virtual thread main function
-    std::string UnprocessCallSign (std::string cs);         ///< Converts "Piper-two-Five-Seven-papa" back to "Piper 257P"
 };
 
 #endif /* LTSayIntentions_h */

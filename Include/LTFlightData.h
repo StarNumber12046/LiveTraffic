@@ -173,7 +173,7 @@ public:
         // here starts the range of non-interchangeable, truly organisation-specific keys
         KEY_ORG_SPECIFIC = 0x0010,
         KEY_FSC,
-        KEY_SAYINTENTIONS,
+        KEY_VOLANTA,
         KEY_AUTOATC,
         KEY_PRIVATE,                            // plane doesn't want to be identified, so we generate a private internally key ourselves
     };

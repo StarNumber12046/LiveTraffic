@@ -146,7 +146,7 @@ extern DataRefs dataRefs;
 #include "LTADSBHub.h"
 #include "LTOpenGlider.h"
 #include "LTFSCharter.h"
-#include "LTSayIntentions.h"
+#include "LTVolanta.h"
 #include "LTAutoATC.h"
 #include "LTSynthetic.h"
 

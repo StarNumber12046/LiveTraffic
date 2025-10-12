@@ -176,7 +176,7 @@ set(Header_Files
     Include/LTOpenGlider.h
     Include/LTOpenSky.h
     Include/LTRealTraffic.h
-    Include/LTSayIntentions.h
+    Include/LTVolanta.h
     Include/LTSynthetic.h
     Include/LTWeather.h
     Include/SettingsUI.h
@@ -226,7 +226,7 @@ set(Source_Files
     Src/LTOpenSky.cpp
     Src/LTRealTraffic.cpp
     Src/LTSynthetic.cpp
-    Src/LTSayIntentions.cpp
+    Src/LTVolanta.cpp
     Src/LTVersion.cpp
     Src/LTWeather.cpp
     Src/SettingsUI.cpp

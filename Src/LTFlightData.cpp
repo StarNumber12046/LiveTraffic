@@ -270,7 +270,7 @@ std::string LTFlightData::FDKeyTy::SetKey (FDKeyType _eType, unsigned long _num)
         case KEY_PRIVATE:
             snprintf(buf, sizeof(buf), "%08lX", _num);
             break;
-        case KEY_SAYINTENTIONS:
+        case KEY_VOLANTA:
         case KEY_AUTOATC:
             snprintf(buf, sizeof(buf), "%lu", _num);
             break;
@@ -325,7 +325,7 @@ const char* LTFlightData::FDKeyTy::GetKeyTypeText () const
         case KEY_OGN:       return "OGN";
         case KEY_ORG_SPECIFIC: return "org-specific";   // not actually used...just to please compiler warnings
         case KEY_FSC:       return "FSCharter";
-        case KEY_SAYINTENTIONS: return "SI";
+        case KEY_VOLANTA: return "Volanta";
         case KEY_AUTOATC:   return "AutoATC";
         case KEY_PRIVATE:   return "private";
     }

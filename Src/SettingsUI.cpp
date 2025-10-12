@@ -838,21 +838,21 @@ void LTSettingsUI::buildInterface()
                 if (!*sFilter) ImGui::TreePop();
             }
 
-            // --- SayIntentions ---
-            if (ImGui::TreeNodeCbxLinkHelp(SI_NAME, nCol,
-                                           DR_CHANNEL_SAYINTENTIONS,
-                                           "Enable tracking " SI_NAME " online flights",
-                                           ICON_FA_EXTERNAL_LINK_SQUARE_ALT " " SI_CHECK_NAME,
-                                           SI_CHECK_URL,
-                                           SI_CHECK_POPUP,
-                                           HELP_SET_CH_SI, "Open Help on " SI_NAME " in Browser",
+            // --- Volanta ---
+            if (ImGui::TreeNodeCbxLinkHelp(VL_NAME, nCol,
+                                           DR_CHANNEL_VOLANTA,
+                                           "Enable tracking " VL_NAME " online flights",
+                                           ICON_FA_EXTERNAL_LINK_SQUARE_ALT " " VL_CHECK_NAME,
+                                           VL_CHECK_URL,
+                                           VL_CHECK_POPUP,
+                                           HELP_SET_CH_SI, "Open Help on " VL_NAME " in Browser",
                                            sFilter, nOpCl))
             {
                 // User's displayname, so we can skip their own aircraft
                 if (ImGui::FilteredLabel("Own Displayname", sFilter)) {
                     ImGui::Indent(ImGui::GetWidthIconBtn(true));
-                    ImGui::InputTextWithHint("##SIDisplayName",
-                                             "Hide your aircraft by entering your SI's displayname",
+                    ImGui::InputTextWithHint("##VLDisplayName",
+                                             "Hide your aircraft by entering your Volanta displayname",
                                              &sSIDisplayName);
                     if (ImGui::IsItemDeactivatedAfterEdit())
                         dataRefs.SetSIDisplayName(sSIDisplayName);
@@ -863,7 +863,7 @@ void LTSettingsUI::buildInterface()
 
                 // Connection status details
                 if (ImGui::FilteredLabel("Connection Status", sFilter)) {
-                    LTChannel* pSICh = LTFlightDataGetCh(DR_CHANNEL_SAYINTENTIONS);
+                    LTChannel* pSICh = LTFlightDataGetCh(DR_CHANNEL_VOLANTA);
                     if (pSICh) {
                         ImGui::TextWrapped("%s", pSICh->GetStatusText().c_str());
                     } else {
