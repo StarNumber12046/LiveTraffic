@@ -42,11 +42,13 @@
 #define VL_NETWORK_NAME         "Volanta"               ///< network name, e.g. "Volanta"
 
 #define VL_KEY                  "id"
+
 #define VL_POSITION             "position"              ///< position object
 #define VL_LAT                  "latitude"
 #define VL_LON                  "longitude"
 #define VL_ALT                  "altitude"
 #define VL_ALT_AGL              "altitudeAgl"
+
 #define VL_DISPLAYNAME          "networkUserName"
 #define VL_ORIGIN               "originIcao"
 #define VL_DEST                 "destinationIcao"
