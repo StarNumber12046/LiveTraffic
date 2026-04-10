@@ -263,7 +263,7 @@ bool FileRecLookup (std::ifstream& f, size_t& n,
     unsigned long Ar = maxKey;      // key value at position R
     while (L != R) {
         // approximation by linear interpolation
-        m = L + (size_t)std::floor(float(key-Al)/float(Ar-Al) * (R-L));
+        m = L + (size_t)std::floor(float(key-Al)/float(Ar-Al) * float(R-L));
         
         // test if record at m is less than the key
         f.seekg((long long)(m * recLen));
@@ -656,29 +656,50 @@ std::string Cleartext (const std::string& _obfuscated)
 // MARK: Time Functions
 //
 
-// returns offset to UTC in seconds
-/// @see https://stackoverflow.com/questions/13804095/get-the-time-zone-gmt-offset-in-c
-int timeOffsetUTC()
+/// @brief Returns number of days since civil 1970-01-01.  Negative values indicate days prior to 1970-01-01.
+/// @see http://howardhinnant.github.io/date_algorithms.html#days_from_civil
+/// @author Howard Hinnant
+/// @details Preconditions:
+///                 y-m-d represents a date in the civil (Gregorian) calendar
+///                 m is in [1, 12]
+///                 d is in [1, last_day_of_month(y, m)]
+///                 y is "approximately" in
+///                   [numeric_limits<Int>::min()/366, numeric_limits<Int>::max()/366]
+///                 Exact range of validity is:
+///                 [civil_from_days(numeric_limits<Int>::min()),
+///                  civil_from_days(numeric_limits<Int>::max()-719468)]
+constexpr int days_from_civil(int y, int m, int d) noexcept
 {
-    static int cachedOffset = INT_MIN;
+    static_assert(std::numeric_limits<int>::digits >= 18,
+                  "This algorithm has not been ported to a 16 bit unsigned integer");
+    static_assert(std::numeric_limits<int>::digits >= 20,
+                  "This algorithm has not been ported to a 16 bit signed integer");
+    y -= m <= 2;
+    const int era = (y >= 0 ? y : y-399) / 400;
+    const int yoe = y - era * 400;                          // [0, 399]
+    const int doy = (153*(m > 2 ? m-3 : m+9) + 2)/5 + d-1;  // [0, 365]
+    const int doe = yoe * 365 + yoe/4 - yoe/100 + doy;      // [0, 146096]
+    return era * 146097 + doe - 719468;
+}
 
-    if (cachedOffset > INT_MIN)
-        return cachedOffset;
-    else {
-        time_t gmt, rawtime = time(NULL);
-        struct tm gbuf;
-        gmtime_s(&gbuf, &rawtime);
+/// @brief Converts a UTC date/time to epoch value
+/// @see Adapted from https://stackoverflow.com/a/59797075
+time_t mktime_utc (int y, int m, int d, int h, int min, int s)
+{
+    LOG_ASSERT(1 <= m && m <= 12);
+    const int days_since_epoch = days_from_civil(y, m, d);
+    return 60L * (60L * (24L * days_since_epoch + h) + min) + s;
+}
 
-        // Request that mktime() looks up dst in timezone database
-        gbuf.tm_isdst = -1;
-        gmt = mktime(&gbuf);
-
-        return cachedOffset = (int)difftime(rawtime, gmt);
-    }
+/// Converts date/time (UTC) to epoch value
+time_t mktime_utc (std::tm& tm)
+{
+    return mktime_utc(tm.tm_year + 1900, tm.tm_mon+1, tm.tm_mday,
+                      tm.tm_hour, tm.tm_min, tm.tm_sec);
 }
 
 // Converts a UTC time to epoch value, assuming today's date
-time_t mktime_utc (int h, int min, int s)
+time_t mktime_utc_today (int h, int min, int s)
 {
     const time_t now = time(NULL);
     struct tm gbuf;
@@ -698,41 +719,28 @@ time_t mktime_utc (int h, int min, int s)
     return ret;
 }
 
-/// Converts a UTC date/time to epoch value
-time_t mktime_utc (int y, int m, int d, int h, int min, int s)
+// Convert time string "YYYY-MM-DDTHH:MM:SS.SSS" to epoch value plus fractions of seconds as decimals
+// Examples from WorldTimeAPI: "2026-01-01T17:49:11.635667+00:00"
+/// @returns `NAN` if string couldn't be parsed
+double mktimefrac_string (const std::string& s)
 {
-    const time_t now = time(NULL);
-    struct tm gbuf;
-    gmtime_s(&gbuf, &now);
-    gbuf.tm_year = y - 1900;
-    gbuf.tm_mon  = m-1;
-    gbuf.tm_mday = d;
-    gbuf.tm_hour = h;
-    gbuf.tm_min  = min;
-    gbuf.tm_sec  = s;
-    gbuf.tm_isdst = -1;         // re-lookup timezone/DST information!
-    return mktime_utc(gbuf);
-}
-
-// Convert time string "YYYY-MM-DD HH:MM:SS" to epoch value
-time_t mktime_string (const std::string& s)
-{
-    static std::regex reTm ("(\\d{4})-(\\d{2})-(\\d{2}) (\\d{1,2}):(\\d{2}):(\\d{2})");
-    std::smatch mTm;
-    std::regex_search(s, mTm, reTm);
-    if (mTm.size() != 7)
-        return 0;
-        
     struct tm gbuf;
     memset(&gbuf, 0, sizeof(gbuf));
-    gbuf.tm_year = std::stoi(mTm.str(1)) - 1900;
-    gbuf.tm_mon  = std::stoi(mTm.str(2)) -    1;
-    gbuf.tm_mday = std::stoi(mTm.str(3));
-    gbuf.tm_hour = std::stoi(mTm.str(4));
-    gbuf.tm_min  = std::stoi(mTm.str(5));
-    gbuf.tm_sec  = std::stoi(mTm.str(6));
-    gbuf.tm_isdst = -1;         // re-lookup timezone/DST information!
-    return mktime_utc(gbuf);
+    float ss = NAN;
+    int ret = sscanf(s.c_str(), "%u-%u-%u%*1[ T]%u:%u:%f",
+                     &gbuf.tm_year, &gbuf.tm_mon, &gbuf.tm_mday,
+                     &gbuf.tm_hour, &gbuf.tm_min, &ss);
+
+    // Must have 6 values, and year can't be zero
+    if (ret != 6 || gbuf.tm_year == 0)
+        return NAN;
+    
+    // convert to unixtime
+    gbuf.tm_year -= 1900;           // adjust to the weird input values for mktime
+    gbuf.tm_mon  --;
+    gbuf.tm_isdst = -1;             // re-lookup timezone/DST information!
+    const time_t t = mktime_utc(gbuf);
+    return double(t) + double(ss);  // add the seconds incl. fraction to it
 }
 
 
@@ -765,9 +773,9 @@ std::string NetwTimeString (float runS)
 {
     // Extract hours, minutes, and seconds (incl. fractions) from runS
     const unsigned runH = unsigned(runS / 3600.0f);
-    runS -= runH * 3600.0f;
+    runS -= float(runH) * 3600.0f;
     const unsigned runM = unsigned(runS / 60.0f);
-    runS -= runM * 60.0f;
+    runS -= float(runM) * 60.0f;
 
     // Convert to string
     char s[20];
@@ -970,7 +978,105 @@ float interpolate (const std::vector<float>& scale,
 }
 
 //
-//MARK: Callbacks
+//MARK: One-Time Setup (Flight Loop Callback)
+//
+
+/// One-Time Setup state
+static enum ONCE_CB_STATE
+{ ONCE_CB_ADD_DREFS=0, ONCE_CB_AUTOSTART, ONCE_WAIT_FOR_VER, ONCE_CB_DONE }
+eOneTimeState = ONCE_CB_ADD_DREFS;
+
+/// Puts some timestamps into the log for analysis purposes
+void LogTimestamps ()
+{
+    // Log current timestamp and sim-time-stamp
+    LOG_MSG(logMSG, MSG_TIMESTAMPS,
+            ts2string(std::time(nullptr)).c_str(),
+            dataRefs.GetSimTimeString().c_str());
+}
+
+/// Handling some step-by-step one-time setup tasks
+float LoopOneTimeSetup ()
+{
+    static std::future<bool> futVerCheck;
+    
+    switch (eOneTimeState) {
+        case ONCE_CB_ADD_DREFS:
+        {
+            // Create a message window and say hello
+            SHOW_MSG(logINFO, MSG_WELCOME, LT_VERSION_FULL);
+            if constexpr (LIVETRAFFIC_VERSION_BETA)
+                SHOW_MSG(logWARN, BETA_LIMITED_VERSION, LT_BETA_VER_LIMIT_TXT);
+#ifdef DEBUG
+            SHOW_MSG(logWARN, DBG_DEBUG_BUILD);
+#endif
+            
+            // Show FMOD Logo (https://www.fmod.com/attribution)
+            CreateMsgWindow(WIN_TIME_DISPLAY, logMSG, MSG_FMOD_SOUND);
+            
+            // Inform dataRef tools about our dataRefs
+            dataRefs.InformDataRefEditors();
+            
+            // Check if we've got a UTC time
+            dataRefs.GetNetwTsOffset();
+            
+            // If weather setting is yet undetermined make a choice
+            // (This is one-time code introduced with weather functionality,
+            //  should actually be in DataRefs::LoadConfig,
+            //  but can't because determining if user has set real weather
+            //  only works later, in the flight loops.)
+            // Set to "RealTraffic weather" if X-Plane is set to real weather
+            //  and user has a RT license.
+            if (dataRefs.GetWeatherControl() < WC_NONE)
+                DATA_REFS_LT[DR_CFG_WEATHER_CONTROL].setData((WeatherIsXPRealWeather_xp() && !dataRefs.GetRTLicense().empty()) ?
+                                                             WC_REAL_TRAFFIC : WC_NONE);
+            
+            // next: Auto Start, but wait another 2 seconds for that
+            eOneTimeState = ONCE_CB_AUTOSTART;
+            return 2;
+        }
+        case ONCE_CB_AUTOSTART:
+            // Check last time if we've got a UTC time
+            dataRefs.GetNetwTsOffset();
+            
+            // Log a timestamp to synch timing for analysis purposes
+            LogTimestamps ();
+            
+            // Auto Start display of aircraft
+            if (dataRefs.GetAutoStart())
+                dataRefs.SetAircraftDisplayed(true);
+            
+            // check at X-Plane.org for version updates
+            if (dataRefs.NeedNewVerCheck()) {
+                futVerCheck = std::async(std::launch::async, FetchLatestLTVersion);
+                eOneTimeState = ONCE_WAIT_FOR_VER;
+                return 2;
+            }
+            
+            // done, don't call me again
+            eOneTimeState = ONCE_CB_DONE;
+            return 0;
+            
+        case ONCE_WAIT_FOR_VER:
+            // did the version check not yet come back?
+            if (std::future_status::ready != futVerCheck.wait_for(std::chrono::microseconds(0)))
+                return 2;
+            
+            // version check successful?
+            if (futVerCheck.get())
+                HandleNewVersionAvail();      // handle the outcome
+            
+            // done
+            eOneTimeState = ONCE_CB_DONE;
+            [[fallthrough]];
+        default:
+            // don't want to be called again
+            return 0;
+    }
+}
+
+//
+// MARK: Callbacks
 //
 
 // collects all updates that need to be done up to every flight loop cycle
@@ -1003,7 +1109,8 @@ void LTRegularUpdates()
 // creates/destroys aircraft by looping the flight data map
 float LoopCBAircraftMaintenance (float inElapsedSinceLastCall, float, int, void*)
 {
-    static float elapsedSinceLastAcMaint = 0.0f;
+    // initialize in a way that the first maintenance is immediate
+    static float elapsedSinceLastAcMaint = AC_MAINT_INTVL;
     do {
         // *** check for new positons that require terrain altitude (Y Probes) ***
         // LiveTraffic Top Level Exception handling: catch all, reinit if something happens
@@ -1011,9 +1118,13 @@ float LoopCBAircraftMaintenance (float inElapsedSinceLastCall, float, int, void*
             // regular calls collected here
             LTRegularUpdates();
             
-            // all the rest we do only every 2s
+            // keep track of elapsed time since last 'expensive' maintenance
             elapsedSinceLastAcMaint += inElapsedSinceLastCall;
-            if (elapsedSinceLastAcMaint < AC_MAINT_INTVL)
+
+            // all the rest we do only every 2s
+            if (elapsedSinceLastAcMaint < AC_MAINT_INTVL ||
+                // We really depend on a position...bail if XP doesn't yet know where we are
+                !dataRefs.GetViewPos().isNormal(true,true))
                 return FLIGHT_LOOP_INTVL;          // call me again
             
             // fall through to the expensive stuff
@@ -1052,10 +1163,14 @@ float LoopCBAircraftMaintenance (float inElapsedSinceLastCall, float, int, void*
         
         // LiveTraffic Top Level Exception handling: catch all, reinit if something happens
         try {
+            // Do one-time inits
+            if (eOneTimeState < ONCE_CB_DONE)
+                LoopOneTimeSetup();
+            
             // Potentially refresh weather information
             dataRefs.WeatherFetchMETAR();
             // Update the weather (short-cuts if nothing to do)
-            WeatherUpdate();
+            WeatherUpdate_xp();
             
             // Refresh airport data from apt.dat (in case camera moved far)
             if (LTAptRefresh()) {                   // fresh airport data available?

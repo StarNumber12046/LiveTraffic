@@ -74,6 +74,20 @@ Doc8643::operator std::string() const
     model + ';' + manufacturer;
 }
 
+// Returns the wake category as per XP12's wake system
+int Doc8643::GetWakeCat() const
+{
+    switch (wtc[0])
+    {
+        case '-':                           // Not assigned, which happens to the first few lines of Doc8643 with light aircraft, so we consider it light
+        case 'L': return 0;                 // Light, also catches the "L/M" type, but XP only offers 4 values anyway
+        case 'H': return 2;                 // Heavy, like B744
+        case 'J': return 3;                 // Super, like A388
+        default:
+            return 1;                       // default: Medium
+    }
+}
+
 //
 // Static functions
 //
@@ -335,9 +349,11 @@ bool WndRect::keepOnScreen ()
 const char* DATA_REFS_XP[] = {
     "sim/network/misc/network_time_sec",        // float	n	seconds	The current elapsed time synched across the network (used as timestamp in Log.txt)
     "sim/time/local_time_sec",
-    "sim/time/local_date_days",
+    "sim/cockpit2/clock_timer/current_day",     // int    n    day    Numeric day of month
+    "sim/cockpit2/clock_timer/current_month",   // int    n    month    Numeric month of the year
     "sim/time/use_system_time",
     "sim/time/zulu_time_sec",
+    "sim/time/paused",                          //    int    n    boolean    Is the sim paused?
     "sim/operation/prefs/replay_mode",          //    int    y    enum    Are we in replay mode?
     "sim/graphics/view/view_is_external",
     "sim/graphics/view/view_type",
@@ -565,6 +581,7 @@ DataRefs::dataRefDefinitionT DATA_REFS_LT[CNT_DATAREFS_LT] = {
     {"livetraffic/channel/real_traffic/listen_port",DataRefs::LTGetInt, DataRefs::LTSetCfgValue,    GET_VAR, true },
     {"livetraffic/channel/real_traffic/traffic_port",DataRefs::LTGetInt,DataRefs::LTSetCfgValue,    GET_VAR, true },
     {"livetraffic/channel/real_traffic/weather_port",DataRefs::LTGetInt,DataRefs::LTSetCfgValue,    GET_VAR, true },
+    {"livetraffic/channel/real_traffic/send_pos_frequ",DataRefs::LTGetInt,DataRefs::LTSetCfgValue,  GET_VAR, true },
     {"livetraffic/channel/real_traffic/sim_time_ctrl",DataRefs::LTGetInt,DataRefs::LTSetCfgValue,   GET_VAR, true },
     {"livetraffic/channel/real_traffic/man_toffset",DataRefs::LTGetInt,DataRefs::LTSetCfgValue,     GET_VAR, true },
     {"livetraffic/channel/real_traffic/connect_type",DataRefs::LTGetInt,DataRefs::LTSetCfgValue,    GET_VAR, true },
@@ -633,7 +650,7 @@ void* DataRefs::getVarAddr (dataRefsLT dr)
         case DR_CFG_HIDE_PARKING:           return &hideParking;
         case DR_CFG_HIDE_NEARBY_GND:        return &hideNearbyGnd;
         case DR_CFG_HIDE_NEARBY_AIR:        return &hideNearbyAir;
-        case DR_CFG_HIDE_IN_REPLAY:         return &hideInReplay;
+        case DR_CFG_HIDE_PAUSED_REPLAY:     return &hidePausedReplay;
         case DR_CFG_HIDE_STATIC_TWR:        return &hideStaticTwr;
         case DR_CFG_COPY_OBJ_FILES:         return &cpyObjFiles;
         case DR_CFG_CONTRAIL_MIN_ALT:       return &contrailAltMin_ft;
@@ -664,6 +681,7 @@ void* DataRefs::getVarAddr (dataRefsLT dr)
         case DR_CFG_RT_LISTEN_PORT:         return &rtListenPort;
         case DR_CFG_RT_TRAFFIC_PORT:        return &rtTrafficPort;
         case DR_CFG_RT_WEATHER_PORT:        return &rtWeatherPort;
+        case DR_CFG_RT_SEND_POS_FREQU:      return &rtSendPosFrequ;
         case DR_CFG_RT_SIM_TIME_CTRL:       return &rtSTC;
         case DR_CFG_RT_MAN_TOFFSET:         return &rtManTOfs;
         case DR_CFG_RT_CONNECT_TYPE:        return &rtConnType;
@@ -879,7 +897,7 @@ bool DataRefs::Init ()
     // Using a modern graphics driver? (Metal, Vulkan)
     bUsingModernDriver = adrXP[DR_MODERN_DRIVER] ? XPLMGetDatai(adrXP[DR_MODERN_DRIVER]) != 0 : false;
     
-    // Start looking up time from TimeIo, will actually start an async process
+    // Start looking up time from the internet, will actually start an async process
     GetNetwTsOffset();
 
     // read Doc8643 file (which we could live without)
@@ -1046,72 +1064,43 @@ float DataRefs::GetMiscNetwTime() const
 ///          if zulu data is before, on, or after local date.
 void DataRefs::UpdateXPSimTime()
 {
-    // convert all numbers right away to milliseconds as we need that in the end anyway
-    // and that way we preserve the meaning of the fractional seconds coming from X-Plane
-    constexpr long long DAY_MS = 24LL * 60LL * 60LL * 1000LL;
-    long long t = (long long)(GetLocalDateDays()) * DAY_MS;
-    const long long localTime = (long long)(GetLocalTimeSec() * 1000.0f);
-    const long long zuluTime =  (long long)(GetZuluTimeSec()  * 1000.0f);
-    // if local and zulu time are different at all (testing for more than one minute difference)
-    if (std::llabs(localTime - zuluTime) > 60000LL) {
-        // Eastern hemisphere? -> Zulu is _behind_ local time
-        if (lastUsersPlanePos.lon() > 0.0) {
-            // but if the local Zulu time component is actually _ahead of_ local time, then need to decrement zulu date
-            if (zuluTime > localTime)
-                t -= DAY_MS;
-        } else {
-            // Western hemisphere -> Zulu is _ahead of_ local time
-            // but if the zulu time component is actually _behind_ local time, then need to increment zulu date
-            if (zuluTime < localTime)
-                t += DAY_MS;
-        }
-    }
-    // Now t is date in zulu days, just add time component
-    t += zuluTime;
+    constexpr time_t DAY_S = 24LL * 60LL * 60LL;        // 1 day in seconds
+
+    const int locDay = GetLocalDayOfMonth();            // local day of XP user time
+    const int locMon = GetLocalMonth();                 // local month of XP user time
+    const float locTimeSec = GetLocalTimeSec();         // local time of day in fractional seconds
+    const float utcTimeSec = GetZuluTimeSec();          // ZULU/UTC time of day in fractional seconds
+    const long diffHours = std::lround((locTimeSec-utcTimeSec)/3600.0f);
+    const double lon = GetUsersPlanePos().lon();        // user plane's longitude, needed for estimate of time zone difference
+    const long estTZDiff = std::lround(lon/15.0);       // estimate timezone difference in hours ('positive' = east = local is ahead of UTC)
     
-    // Last thing to do: Add the beginning of the right year to it
-    // Complications: X-Plane has no notion of a "year", it just returns days since start of the year
-    //                X-Plane offers only 28 days for February, so it runs on a 365d year
-    //                If the day of the year is past current real life day of year, then assume "last year"
-    //                But: What do we do with leap years in reality???
-    
-    // Find this year's beginning
+    // What's the current year?
     time_t now;
     std::tm tm;
     time(&now);                     // today, actually 'now'
     gmtime_s(&tm, &now);
-    // to get to jan01 of the same year reduce by all the days of the year and current time
-    const time_t jan01 = now - tm.tm_yday * 24*60*60
-                             - tm.tm_hour *    60*60
-                             - tm.tm_min  *       60
-                             - tm.tm_sec;
+
+    // Calculate UTC time for the given local date and current year
+    time_t utc = mktime_utc(tm.tm_year+1900, locMon, locDay, 0, 0, 0);
     
-    // Convert to milliseconds, then add to our result
-    t += (long long)(jan01) * 1000LL;
+    // Realistically, Local and UTC should not be more than 12h apart.
+    // estTZDiff should point in the right direction.
+    if (diffHours >= 12 && estTZDiff <= 1)              // local should be behind -> UTC is on next day already
+        utc += DAY_S;
+    else if (diffHours <= -12 && estTZDiff >= -1)       // local should be ahead -> UTC is still on previous day
+        utc -= DAY_S;
     
-    // if t is now (more than 1s) in the future, then we reduce t by an entire year,
-    // supposingly pointing to the same day last year
-    if (t > (long long)(now+1) * 1000LL) {
-        // Save a date representation of what we computed so far in the future
-        time_t unix_t = time_t(t / 1000LL);
-        std::tm tm_future;
-        gmtime_s(&tm_future, &unix_t);
-        
-        // reduce by 365 days
-        t -= 365LL * DAY_MS;
-        
-        // Would we need to skip over a leap year's 29th Feb?
-        // Goal is: We need to end up on the same day of the month,
-        //          so convert back to calendar days and let's check
-        unix_t = time_t(t / 1000LL);
-        gmtime_s(&tm, &unix_t);
-        // If day of month don't agree then reduce by another day to cover leap day
-        if (tm.tm_mday != tm_future.tm_mday)
-            t -= DAY_MS;
+    // If the calculated result is in the future we need to go back one year
+    if (utc > now) {
+        utc = mktime_utc(tm.tm_year -1 +1900, locMon, locDay, 0, 0, 0);
+        if (diffHours >= 12 && estTZDiff <= 1)              // local should be behind -> UTC is on next day already
+            utc += DAY_S;
+        else if (diffHours <= -12 && estTZDiff >= -1)       // local should be ahead -> UTC is still on previous day
+            utc -= DAY_S;
     }
     
-    // Done: store as our last calculate value
-    lastXPSimTime_ms = (long long)t;
+    // finally, add the fractional seconds of the day to properly form milliseconds
+    lastXPSimTime_ms = utc * 1000LL + std::llround(utcTimeSec * 1000.0f);
 }
 
 
@@ -1142,7 +1131,8 @@ void DataRefs::SetViewType(XPViewTypes vt)
 // return user's plane pos
 positionTy DataRefs::GetUsersPlanePos(double* pTrueAirspeed_m,
                                       double* pTrack,
-                                      double* pHeightAGL_m) const
+                                      double* pHeightAGL_m,
+                                      double* pGroundSpeed_m) const
 {
     // access guarded by a lock
     std::lock_guard<std::recursive_mutex> lock(mutexDrUpdate);
@@ -1152,6 +1142,7 @@ positionTy DataRefs::GetUsersPlanePos(double* pTrueAirspeed_m,
     if (pTrueAirspeed_m)    *pTrueAirspeed_m    = lastUsersTrueAirspeed;
     if (pTrack)             *pTrack             = lastUsersTrack;
     if (pHeightAGL_m)       *pHeightAGL_m       = lastUsersAGL_ft * M_per_FT;
+    if (pGroundSpeed_m)     *pGroundSpeed_m     = lastUsersGroundSpeed;
 
     return ret;
 }
@@ -1177,8 +1168,9 @@ void DataRefs::UpdateUsersPlanePos ()
     // cache the position
     lastUsersPlanePos = pos;
     
-    // also fetch true airspeed and track
+    // also fetch true airspeed, ground speed, and track
     lastUsersTrueAirspeed   = XPLMGetDataf(adrXP[DR_PLANE_TAS]);
+    lastUsersGroundSpeed    = XPLMGetDataf(adrXP[DR_PLANE_GS]);
     lastUsersTrack          = XPLMGetDataf(adrXP[DR_PLANE_TRACK]);
 
     // fetch current height AGL and convert to feet
@@ -2500,147 +2492,168 @@ int DataRefs::CntChannelEnabled () const
 }
 
 //
-// MARK: Time.io Network Time
+// MARK: Internet UTC Time
+//       NTP Query suggested by Chat.GPT
 //
 
-/// CURL WriteData callback function, just stores all what comes in
-size_t TimeIoWriteData (char *ptr, size_t, size_t nmemb, void* userdata)
+// Most required includes and defines are already included through Lib/XPMP2/src/Network.h
+#if IBM
+typedef SSIZE_T ssize_t;
+#define net_errno WSAGetLastError()         // https://docs.microsoft.com/en-us/windows/desktop/WinSock/error-codes-errno-h-errno-and-wsagetlasterror-2
+#define close closesocket
+#else
+#include <unistd.h>
+#include <arpa/inet.h>
+#define net_errno errno
+#endif
+
+double GetNTPTime()
 {
-    // add buffer to our std::string
-    std::string& readBuf = *reinterpret_cast<std::string*>(userdata);
-    readBuf.append(ptr, nmemb);
+    constexpr uint64_t NTP_TIMESTAMP_DELTA = 2208988800ULL;
+    constexpr size_t NTP_PACKET_SIZE = 48;
     
-    // all consumed
-    return nmemb;
+    addrinfo hints{};
+    addrinfo* res = nullptr;
+    SOCKET sockfd = INVALID_SOCKET;
+    double seconds = NAN;           // the return value
+    
+    try {
+        hints.ai_family   = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+        
+        const int rc = getaddrinfo("pool.ntp.org", "123", &hints, &res);
+        if (rc != 0) {
+            LOG_MSG(logERR, "getaddrinfo failed: %d", rc);
+            throw std::exception();
+        }
+        
+        sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (sockfd == INVALID_SOCKET) {
+            LOG_MSG(logERR, "socket failed: %d", int(net_errno));
+            throw std::exception();
+        }
+        
+        // Optional but recommended: receive timeout
+#if IBM
+        DWORD timeout_ms = 10000;
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO,
+                   (const char*)&timeout_ms, sizeof(timeout_ms));
+#else
+        timeval timeout{};
+        timeout.tv_sec = 10;
+        timeout.tv_usec = 0;
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+#endif
+        char packet[NTP_PACKET_SIZE]{};
+        packet[0] = 0x1B; // LI=0, VN=3, Mode=3 (client)
+        
+        // Send "request"
+        ssize_t sent = sendto(sockfd,
+                              packet,
+                              sizeof(packet),
+                              0,
+                              res->ai_addr,
+#if IBM
+                              int(res->ai_addrlen));
+#else
+                              res->ai_addrlen);
+#endif
+
+        if (sent != (ssize_t)sizeof(packet)) {
+            LOG_MSG(logERR, "sendto failed: %d", int(net_errno));
+            throw std::exception();
+        }
+        // Receive "response"
+        ssize_t received = recvfrom(sockfd,
+                                    packet,
+                                    sizeof(packet),
+                                    0,
+                                    nullptr,
+                                    nullptr);
+        
+        if (received < 0) {
+            LOG_MSG(logERR, "recvfrom failed (timeout?): %d", int(net_errno));
+            throw std::exception();
+        }
+        if (received < (ssize_t)NTP_PACKET_SIZE) {
+            LOG_MSG(logERR, "Short NTP packet, %d instead of %d bytes",
+                    int(received), int(NTP_PACKET_SIZE));
+            throw std::exception();
+        }
+        
+        // Extract transmit timestamp (bytes 40–47)
+        uint32_t sec_part;
+        uint32_t frac_part;
+        
+        std::memcpy(&sec_part,  packet + 40, 4);
+        std::memcpy(&frac_part, packet + 44, 4);
+        
+        sec_part  = ntohl(sec_part);
+        frac_part = ntohl(frac_part);
+        
+        seconds =
+        (double)(sec_part - NTP_TIMESTAMP_DELTA) +
+        (double)frac_part / 4294967296.0; // 2^32
+    }
+    catch (...)
+    {}
+    
+    // Cleanup
+    if (sockfd != INVALID_SOCKET)
+        close(sockfd);
+    if (res)
+        freeaddrinfo(res);
+    
+    return seconds;
 }
 
-/// @brief Performs a GET HTTP on TimeIO API to get current UTC time and compares to local time
+
+
+/// @brief Gets UTC time from an NTP server, returns difference to local time
 /// @note Assumes to be called via std::async or the like as it blocks during HTTP retrieval
-/// @see https://timeapi.io/swagger/index.html
-/// @details The data returned by TimeIo looks something like
-///          @code
-///          {
-///            "year": 2025,
-///            "month": 5,
-///            "day": 31,
-///            "hour": 20,
-///            "minute": 36,
-///            "seconds": 28,
-///            "milliSeconds": 219,
-///            "dateTime": "2025-05-31T20:36:28.2194241",
-///            "date": "05/31/2025",
-///            "time": "20:36",
-///            "timeZone": "UTC",
-///            "dayOfWeek": "Saturday",
-///            "dstActive": false
-///          }
-///          @endcode
-///          and is returned as a Unix timestamp uncluding millisends,
-///          in the example case `1748723788.219`.
-/// @returns time difference to local time
-double TimeIoGetUTCTimeDiff ()
+/// @returns time difference to local time in seconds with fractional seconds
+static double InternetGetUTCTimeDiff ()
 {
     // This is a communication thread's main function, set thread's name and C locale
-    ThreadSettings TS ("LT_TimeIo", LC_ALL_MASK);
-    double diffTime = NAN;
+    ThreadSettings TS ("LT_InternetTime", LC_ALL_MASK);
 
-    // --- Perform the GET ---
-    char curl_errtxt[CURL_ERROR_SIZE];
-    std::string readBuf;
-    readBuf.reserve(500);       // typical response is about 230 chars
-
-    // initialize the CURL handle
-    CURL *pCurl = curl_easy_init();
-    if (!pCurl) {
-        LOG_MSG(logERR,ERR_CURL_EASY_INIT);
-        return NAN;
-    }
-    
-    // prepare the handle with the right options
-    curl_easy_setopt(pCurl, CURLOPT_NOSIGNAL, 1);
-    curl_easy_setopt(pCurl, CURLOPT_TIMEOUT, dataRefs.GetNetwTimeoutMax());
-    curl_easy_setopt(pCurl, CURLOPT_ERRORBUFFER, curl_errtxt);
-    curl_easy_setopt(pCurl, CURLOPT_WRITEFUNCTION, TimeIoWriteData);
-    curl_easy_setopt(pCurl, CURLOPT_WRITEDATA, &readBuf);
-    curl_easy_setopt(pCurl, CURLOPT_USERAGENT, HTTP_USER_AGENT);
-    curl_easy_setopt(pCurl, CURLOPT_URL, "https://timeapi.io/api/time/current/zone?timeZone=UTC");
-    
-    // perform the HTTP get request
+    // Local time just after receiving the response
     using namespace std::chrono;
-    const auto startMs = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-    CURLcode cc = CURLE_OK;
-    if ( (cc=curl_easy_perform(pCurl)) != CURLE_OK )
-    {
-        // problem with querying revocation list?
-        if (LTOnlineChannel::IsRevocationError(curl_errtxt)) {
-            // try not to query revoke list
-            curl_easy_setopt(pCurl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NO_REVOKE);
-            LOG_MSG(logWARN, ERR_CURL_DISABLE_REV_QU, "TimeIoGetUTCTime");
-            // and just give it another try
-            cc = curl_easy_perform(pCurl);
-        }
-        
-        // if (still) error, then log error
-        if (cc != CURLE_OK) {
-            LOG_MSG(logERR, "Could not get current time from TimeAPI.io: %d - %s", cc, curl_errtxt);
-        }
-    }
-    const auto endMs = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-
-    if (cc == CURLE_OK)
-    {
-        // CURL was OK, now check HTTP response code
-        long httpResponse = 0;
-        curl_easy_getinfo(pCurl, CURLINFO_RESPONSE_CODE, &httpResponse);
-        
-        // not HTTP_OK?
-        if (httpResponse != HTTP_OK) {
-            LOG_MSG(logERR, "Could not get current time from TimeAPI.io: %d - %s", (int)httpResponse, ERR_HTTP_NOT_OK)
-        }
-    }
-    
-    // cleanup CURL handle
-    curl_easy_cleanup(pCurl);
-    
-    // --- Process the data returned ---
-    if (!readBuf.empty()) {
-        // Pass the data through the JSON parser
-        JSONRootPtr pRoot (readBuf.c_str());
-        if (!pRoot) { LOG_MSG(logERR,ERR_JSON_PARSE); return NAN; }
-        
-        // first get the structure's main object
-        JSON_Object* pObj = json_object(pRoot.get());
-        if (!pObj) { LOG_MSG(logERR,ERR_JSON_MAIN_OBJECT); return NAN; }
-        
-        const long year         = jog_l(pObj, "year");
-        // year _cannot_ be 0, hence use a last sanity check
-        if (year > 0) {
-            const time_t utcTime_t = mktime_utc(int(year),
-                                                int(jog_l(pObj, "month")),
-                                                int(jog_l(pObj, "day")),
-                                                int(jog_l(pObj, "hour")),
-                                                int(jog_l(pObj, "minute")),
-                                                int(jog_l(pObj, "seconds")));
-
-            // add milliseconds
-            const long milli    = jog_l(pObj, "milliSeconds");
-            const double utcTime_d = double(utcTime_t) + double(milli) / 1000.0;
-            
-            // local time is the mid-point between startMs and endMs
-            const double localTime_d = (double(startMs) + double(endMs)) / 2000.0;
-            
-            // the difference is:
-            diffTime = utcTime_d - localTime_d;
-        }
-        else {
-            LOG_MSG(logERR, "Could not get current time from TimeAPI.io: %d - %s",
-                    int(HTTP_OK), "No or zero 'year' value, possibly invalid response");
-        }
-    }
-
-    // return if we found something
+    const double start_ms = (double)duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+    const double utc_s = GetNTPTime();
+    if (std::isnan(utc_s))
+        return NAN;
+    const double end_ms = (double)duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+    const double local_s = (start_ms + end_ms) / 2000.0;          // average between start and end
+    const double diffTime = utc_s - local_s;
+    LOG_MSG(logINFO, "NTP says it is %s UTC, %.3fs diff to local time",
+            ts2string(utc_s, 3).c_str(), diffTime);
     return diffTime;
 }
+
+// [min] Time offset to be sent to RealTraffic for (potentially) historic data
+long DataRefs::GetRTHistTimeOff () const
+{
+    switch (GetRTSTC()) {
+            // don't send any ofset ever
+        case STC_NO_CTRL: return 0L;
+            // send what got configured manually
+        case STC_SIM_TIME_MANUALLY: return GetRTManTOfs();
+            // Send as per current simulation time
+        case STC_SIM_TIME_PLUS_BUFFER:
+            if (IsUsingSystemTime()) {     // Using system time means: No ofset
+                return 0L;
+            } else {
+                // Simulated 'now' in seconds since the epoch
+                const time_t simNow = time_t(GetXPSimTime_ms() / 1000LL);
+                const time_t now = time(nullptr);
+                // offset between older 'simNow' and current 'now' in minutes, minus buffering period, but non-negative
+                return std::max (0L, long(now - simNow - GetFdBufPeriod()) / 60L);
+            }
+    }
+    return 0L;
+}
+
 
 // Get current time from a network resource to determine the offset of this computer to real time
 void DataRefs::GetNetwTsOffset ()
@@ -2649,16 +2662,16 @@ void DataRefs::GetNetwTsOffset ()
     if (!std::isnan(chTsOffset))
         return;
     
-    // the future by which we get data from TimeIo
-    static std::future<double> futTimeIo;
+    // the future by which we get time data
+    static std::future<double> futInternetTime;
     static bool bInProgress = false;
     if (!bInProgress) {
         // Perform the HTTP request asynchronously, we will be called again to check on the result
         bInProgress = true;
-        futTimeIo = std::async(std::launch::async, TimeIoGetUTCTimeDiff);
+        futInternetTime = std::async(std::launch::async, InternetGetUTCTimeDiff);
     }
-    if (futTimeIo.valid()) {
-        chTsOffset = futTimeIo.get();
+    else if (futInternetTime.valid()) {
+        chTsOffset = futInternetTime.get();
         if (std::isnan(chTsOffset))         // error? We won't try again but just use zero
             chTsOffset = 0.0;
         else {
@@ -2679,7 +2692,9 @@ void DataRefs::UpdateCachedValues ()
     std::lock_guard<std::recursive_mutex> lock(mutexDrUpdate);
 
     lastNetwTime = XPLMGetDataf(adrXP[DR_MISC_NETW_TIME]);
+    lastPaused = XPLMGetDatai(adrXP[DR_SIM_PAUSED]);
     lastReplay = XPLMGetDatai(adrXP[DR_REPLAY_MODE]);
+    lastUsingSystemTime = XPLMGetDatai(adrXP[DR_USE_SYSTEM_TIME]);
     lastVREnabled =                         // is VR enabled?
     #ifdef DEBUG
         bSimVREntered ? true :              // simulate some aspects of VR
@@ -2873,7 +2888,7 @@ bool DataRefs::WeatherFetchMETAR ()
 }
 
 // Called by the asynch process spawned by ::WeatherUpdate to inform us of the weather
-float DataRefs::SetWeather (float hPa, float lat, float lon,
+float DataRefs::SetWeather (float hPa,
                             const std::string& stationId,
                             const std::string& METAR)
 {
@@ -2885,11 +2900,6 @@ float DataRefs::SetWeather (float hPa, float lat, float lon,
     lastWeatherUpd = GetMiscNetwTime();         // ...now
     lastWeatherStationId = stationId;
     lastWeatherMETAR = METAR;
-    
-    // If we didn't get a station id we can find a matching airport now
-    if (lastWeatherStationId.empty() && !std::isnan(lat) && !std::isnan(lon)) {
-        lastWeatherStationId = GetNearestAirportId(lat, lon);
-    }
     
     // Let's see if we can quickly find the QNH from the metar, which we prefer
     const float qnh = WeatherQNHfromMETAR(METAR);

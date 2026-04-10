@@ -1,6 +1,6 @@
 # LiveTraffic - Set up to be used in the provided docker environment to build lin, mac, and win
 
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.18)
 
 # Mac: Need to tell early on that we want a cross platform build
 if(DEFINED ENV{platform})
@@ -20,10 +20,10 @@ else()
     set(CMAKE_OSX_ARCHITECTURES "x86_64;arm64" CACHE STRING "Archs to build")
 endif()
 
-set(CMAKE_BUILD_TYPE RelWithDebInfo)
+set(CACHE{CMAKE_BUILD_TYPE} TYPE STRING VALUE "RelWithDebInfo")
 
 project(LiveTraffic
-        VERSION 4.3.0
+        VERSION 4.3.5
         DESCRIPTION "LiveTraffic X-Plane plugin")
 set(VERSION_BETA 0)
 
@@ -46,6 +46,46 @@ message("== Building: ${PROJECT_NAME} ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION
 if (VERSION_BETA)
     message("             BETA Version")
 endif()
+
+#
+# MARK: Build Configuration from Environment Variables
+#
+
+# FSCharter OAuth Configuration
+# These can be set via environment variables or CMake cache variables
+# For GitHub Actions, set these as repository secrets
+# For local builds, set environment variables before running cmake
+
+# Production environment
+if(DEFINED ENV{FSC_PROD_CLIENT_ID})
+    set(FSC_PROD_CLIENT_ID "$ENV{FSC_PROD_CLIENT_ID}" CACHE STRING "FSCharter production client ID")
+else()
+    set(FSC_PROD_CLIENT_ID "3" CACHE STRING "FSCharter production client ID")
+endif()
+if(DEFINED ENV{FSC_PROD_CLIENT_SECRET})
+    set(FSC_PROD_CLIENT_SECRET "$ENV{FSC_PROD_CLIENT_SECRET}" CACHE STRING "FSCharter production client secret (base64)")
+else()
+    # Default fallback value, is handled specifically by LiveTraffic code
+    set(FSC_PROD_CLIENT_SECRET "INOP" CACHE STRING "FSCharter production client secret (base64)")
+endif()
+
+# Staging environment
+if(DEFINED ENV{FSC_STAGING_CLIENT_ID})
+    set(FSC_STAGING_CLIENT_ID "$ENV{FSC_STAGING_CLIENT_ID}" CACHE STRING "FSCharter staging client ID")
+else()
+    set(FSC_STAGING_CLIENT_ID "3" CACHE STRING "FSCharter staging client ID")
+endif()
+if(DEFINED ENV{FSC_STAGING_CLIENT_SECRET})
+    set(FSC_STAGING_CLIENT_SECRET "$ENV{FSC_STAGING_CLIENT_SECRET}" CACHE STRING "FSCharter staging client secret (base64)")
+else()
+    # Default fallback value, is handled specifically by LiveTraffic code
+    set(FSC_STAGING_CLIENT_SECRET "INOP" CACHE STRING "FSCharter staging client secret (base64)")
+endif()
+
+string(SUBSTRING "${FSC_PROD_CLIENT_SECRET}" 0 10 _short_secret)    
+message("FSCharter Production          = Client ID: ${FSC_PROD_CLIENT_ID}, Client Secret: ${_short_secret}")
+string(SUBSTRING "${FSC_STAGING_CLIENT_SECRET}" 0 10 _short_secret)
+message("FSCharter Staging             = Client ID: ${FSC_STAGING_CLIENT_ID}, Client Secret: ${_short_secret}")
 
 # By default we build Release with Debug Info (and strip the debug info in post-processing)
 if ((NOT DEFINED CMAKE_BUILD_TYPE) OR (CMAKE_BUILD_TYPE STREQUAL ""))
@@ -125,8 +165,8 @@ else()
         # Use highest optimization level in Release builds
         add_compile_options(/MD /Zi /GL- /O2)
     else()
-        # Use position-independent code and highest optimization level
-        add_compile_options(-O3 -fPIC)
+        # Use position-independent code and highest optimization level plus some minimal debug info for stack traces
+        add_compile_options(-O3 -fPIC -g1)
     endif()
 endif()
 
@@ -142,9 +182,9 @@ include_directories("${CMAKE_CURRENT_SOURCE_DIR}/Lib/base64")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/Lib/OpenGL")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/Lib/parson")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/Lib/XPMP2/inc")
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}/Lib/XPMP2/lib/SDK/CHeaders/XPLM")      # Using XPMP2's copy of the X-Plane SDK
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/Lib/XPMP2/lib/fmod/logo")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/Lib/LTAPI")
-include_directories("${CMAKE_CURRENT_SOURCE_DIR}/Lib/SDK/CHeaders/XPLM")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/Lib/ImGui")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/Lib/ImGui/misc/cpp")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/Lib/ImgWindow")
@@ -271,6 +311,18 @@ if (APPLE)
         COMPILE_OPTIONS "-Wno-deprecated-declarations")
 endif()
 
+# FSCharter OAuth Configuration
+# We keep them restricted to the one file for which they are relevat to reduce log output clutter.
+set_property(
+    SOURCE
+        Src/LTFSCharter.cpp
+    PROPERTY COMPILE_DEFINITIONS
+        FSC_PROD_CLIENT_ID=${FSC_PROD_CLIENT_ID}
+        FSC_PROD_CLIENT_SECRET="${FSC_PROD_CLIENT_SECRET}"
+        FSC_STAGING_CLIENT_ID=${FSC_STAGING_CLIENT_ID}
+        FSC_STAGING_CLIENT_SECRET="${FSC_STAGING_CLIENT_SECRET}"
+)
+
 ################################################################################
 # Define pre-compiled header
 ################################################################################
@@ -303,10 +355,10 @@ target_link_libraries(LiveTraffic XPMP2)
 
 # Specify library search locations.
 if (APPLE)
-    list(APPEND CMAKE_FRAMEWORK_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib/SDK/Libraries/Mac")
+    list(APPEND CMAKE_FRAMEWORK_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib/XPMP2/lib/SDK/Libraries/Mac")
 elseif (WIN32)
     list(APPEND CMAKE_LIBRARY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib/CURL")
-    list(APPEND CMAKE_LIBRARY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib/SDK/Libraries/Win")
+    list(APPEND CMAKE_LIBRARY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib/XPMP2/lib/SDK/Libraries/Win")
 endif ()
 list(APPEND CMAKE_LIBRARY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Lib/fmod")
 
