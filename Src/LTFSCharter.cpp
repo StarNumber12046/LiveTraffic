@@ -45,8 +45,8 @@ typedef std::array<FSCEnvTy, 2> FSCEnvArrTy;
 /// Client ID and Secret need to be injected at build time through compiler defines.
 /// In automatic build they come via Github Action Secrets. See CMakeList.txt.
 static FSCEnvArrTy FSC_ENV = {
-    FSCEnvTy{FSC_PROD_SERVER,    FSC_PROD_CLIENT_ID,    FSC_PROD_CLIENT_SECRET },
-    FSCEnvTy{FSC_STAGING_SERVER, FSC_STAGING_CLIENT_ID, FSC_STAGING_CLIENT_SECRET },
+    {FSC_PROD_SERVER,    3,    "INOP" },
+    {FSC_STAGING_SERVER, 3,    "INOP" },
 };
 
 //
